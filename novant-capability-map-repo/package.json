@@ -1,0 +1,9 @@
+{
+  "name": "novant-capability-map",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Novant Health business capability map — static frontend + Vercel serverless API backed by Neon Postgres.",
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4"
+  }
+}
