@@ -12,7 +12,7 @@ module.exports = async (req, res) => {
 
   const patch = {};
   if (typeof body.primaryCapabilityId === 'string') patch.primaryCapabilityId = body.primaryCapabilityId;
-  if (Array.isArray(body.trmCategory) || body.trmCategory === null) {patch.trmCategory = body.trmCategory;
+  if (typeof body.trmCategory === 'string' || body.trmCategory === null) patch.trmCategory = body.trmCategory;
   if (typeof body.notes === 'string' || body.notes === null) patch.notes = body.notes;
 
   if (Object.keys(patch).length === 0) {
