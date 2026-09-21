@@ -292,6 +292,31 @@
 
   .footer-note{font-size:11px; color:var(--slate-2); text-align:center; padding:14px 0 4px;}
 
+  /* ---------- TRM multiselect checkboxes (application drawer) ---------- */
+  .trm-check-list{border:1px solid var(--line); border-radius:9px; padding:8px 10px; max-height:220px; overflow-y:auto; background:var(--surface-2);}
+  .trm-parent-head{font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--slate-2); margin:8px 0 3px;}
+  .trm-parent-head:first-child{margin-top:0;}
+  .trm-check-row{display:flex; align-items:baseline; gap:6px; padding:3px 4px; font-size:12.5px; cursor:pointer; border-radius:6px;}
+  .trm-check-row:hover{background:var(--surface);}
+  .trm-check-row input{margin:0;}
+  .hint-inline{text-transform:none; letter-spacing:0; font-weight:400; color:var(--slate-2); font-size:11px;}
+
+  /* ---------- New App Reconciliation ---------- */
+  .rc-form{max-width:640px;}
+  .rc-checklist{max-height:420px; overflow-y:auto; border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--surface-2);}
+  .rc-domain-head{font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--slate-2); margin:12px 0 4px;}
+  .rc-domain-head:first-child{margin-top:0;}
+  .rc-l1-head{font-size:11.5px; font-weight:600; color:var(--slate); margin:8px 0 4px 6px;}
+  .rc-l1-head .mono{color:var(--slate-2); font-size:10px; margin-left:4px;}
+  .rc-cap-row{display:flex; align-items:baseline; gap:6px; padding:3px 6px 3px 18px; font-size:12.5px; cursor:pointer; border-radius:6px;}
+  .rc-cap-row:hover{background:var(--surface);}
+  .rc-cap-row input{margin:0;}
+  .rc-cap-id{color:var(--slate-2); font-size:10.5px;}
+  .rc-verdict{font-size:13.5px; font-weight:600; padding:10px 12px; border-radius:9px; background:var(--accent-soft); color:var(--accent); margin-bottom:14px;}
+  .rc-result-card{border:1px solid var(--line-soft); border-radius:9px; padding:8px 10px; margin-bottom:7px; font-size:12.5px;}
+  .rc-result-card.overlap{background:var(--surface);}
+  .rc-overlap-apps{margin-top:6px; font-size:11.5px; color:var(--slate); padding-left:2px;}
+
   @media (prefers-reduced-motion: reduce){
     .drawer, .drawer-backdrop, .l2-card{transition:none;}
   }
@@ -316,6 +341,7 @@
     <button data-view="layered">Layered View</button>
     <button data-view="framework">EA Framework</button>
     <button data-view="unmapped">Unmapped Apps</button>
+    <button data-view="reconcile">New App Reconciliation</button>
   </div>
   <button class="icon-btn" id="exportBtn" title="Download current dataset as JSON">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 19h16"/></svg>
@@ -561,7 +587,7 @@
     html += '<div class="connector"><svg width="24" height="20" viewBox="0 0 24 20"><path d="M12 0v20M6 14l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2"/></svg></div>';
 
     var techCounts = {};
-    apps.forEach(function(a){ if (a.trmCategory){ techCounts[a.trmCategory] = (techCounts[a.trmCategory]||0)+1; } });
+    apps.forEach(function(a){ (a.trmCategories||[]).forEach(function(t){ if (t) techCounts[t] = (techCounts[t]||0)+1; }); });
     var techKeys = Object.keys(techCounts);
     html += '<div class="layer"><div class="layer-label">Technology <span class="hint">&mdash; TRM categories tagged on the apps above</span></div>';
     if (techKeys.length){
@@ -608,6 +634,135 @@
     html += '</details></div>';
 
     return html;
+  }
+
+  // ---------------- rendering: new app reconciliation ----------------
+  function reconcileChecklist(){
+    var html = '<div class="rc-checklist">';
+    domainOrder().forEach(function(d){
+      html += '<div class="rc-domain-head">'+esc(d.domain)+'</div>';
+      l1Groups(d.domain).forEach(function(g){
+        html += '<div class="rc-l1-head">'+esc(g.l1Name)+' <span class="mono">'+esc(g.l1Id)+'</span></div>';
+        g.items.forEach(function(c){
+          var cid = 'rccap_' + c.l2Id.replace(/[^a-z0-9]/gi, '_');
+          html += '<label class="rc-cap-row" for="'+cid+'"><input type="checkbox" id="'+cid+'" class="rc-cap-check" value="'+esc(c.l2Id)+'"><span class="mono rc-cap-id">'+esc(c.l2Id)+'</span> '+esc(c.l2Name)+'</label>';
+        });
+      });
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function renderReconcileView(){
+    var html = '<div class="layer"><div class="layer-label">New App Reconciliation <span class="hint">&mdash; describe a candidate app, pick the capabilities it would offer, and see how it fits the current landscape</span></div>';
+    html += '<div class="rc-form">';
+    html += '<div class="field-row"><label>App name</label><input type="text" id="rcName" placeholder="e.g. Acme Referral Manager"></div>';
+    html += '<div class="field-row"><label>Description</label><textarea id="rcDesc" placeholder="What does this app do?"></textarea></div>';
+    html += '<div class="field-row"><label>Capabilities it offers <span class="hint-inline" id="rcCapCount">&mdash; 0 selected</span></label>'+reconcileChecklist()+'</div>';
+    html += '<div class="save-row"><button class="btn primary" id="rcAnalyzeBtn">Analyze fit</button></div>';
+    html += '</div>';
+    html += '<div id="rcResults"></div>';
+    html += '</div>';
+    return html;
+  }
+
+  function renderReconcileResults(name, description, l2Ids){
+    var rows = l2Ids.map(function(l2Id){
+      var c = state.capabilities.filter(function(x){ return x.l2Id === l2Id; })[0];
+      var apps = appsForCapability(l2Id);
+      return {cap:c, apps:apps};
+    });
+    var overlapRows = rows.filter(function(r){ return r.apps.length > 0; });
+    var gapRows = rows.filter(function(r){ return r.apps.length === 0; });
+
+    var verdict;
+    if (gapRows.length === rows.length){
+      verdict = "Fully additive — every selected capability is currently a gap this app would fill.";
+    } else if (overlapRows.length === rows.length){
+      verdict = "Fully duplicative — every selected capability already has supporting application(s).";
+    } else {
+      verdict = "Mixed fit — " + gapRows.length + " capabilit" + (gapRows.length===1?"y":"ies") + " look like gap(s), " + overlapRows.length + " already ha" + (overlapRows.length===1?"s":"ve") + " supporting app(s).";
+    }
+
+    var html = '<div class="divider"></div>';
+    html += '<div class="rc-verdict">'+esc(verdict)+'</div>';
+
+    html += '<div class="field-row"><label>Capability gaps ('+gapRows.length+') <span class="hint-inline">&mdash; additive fit</span></label>';
+    if (gapRows.length){
+      gapRows.forEach(function(r){
+        html += '<div class="rc-result-card gap"><span class="pill" style="background:var(--good-soft);color:var(--good)">Gap</span> <span class="mono">'+esc(r.cap ? r.cap.l2Id : "")+'</span> '+esc(r.cap ? r.cap.l2Name : "")+'</div>';
+      });
+    } else {
+      html += '<div class="empty-note">None &mdash; every selected capability already has at least one supporting app.</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="field-row"><label>Potential overlap ('+overlapRows.length+') <span class="hint-inline">&mdash; existing apps already serving this capability</span></label>';
+    if (overlapRows.length){
+      overlapRows.forEach(function(r){
+        html += '<div class="rc-result-card overlap"><div><span class="pill" style="background:var(--warn-soft);color:var(--warn)">Overlap</span> <span class="mono">'+esc(r.cap ? r.cap.l2Id : "")+'</span> '+esc(r.cap ? r.cap.l2Name : "")+'</div>';
+        html += '<div class="rc-overlap-apps">'+r.apps.map(function(a){ return esc(a.name) + (a.vendor ? " ("+esc(a.vendor)+")" : "") + " — " + esc(a.disposition||a.installStatus||"n/a"); }).join("<br>")+'</div></div>';
+      });
+    } else {
+      html += '<div class="empty-note">None &mdash; no existing apps currently serve any of the selected capabilities.</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="save-row"><button class="btn" id="rcExportBtn">Export analysis</button></div>';
+
+    document.getElementById("rcResults").innerHTML = html;
+
+    document.getElementById("rcExportBtn").addEventListener("click", function(){
+      var lines = [];
+      lines.push("New App Reconciliation");
+      lines.push("App name: " + name);
+      lines.push("Description: " + description);
+      lines.push("Generated: " + new Date().toISOString());
+      lines.push("");
+      lines.push("Verdict: " + verdict);
+      lines.push("");
+      lines.push("Capability gaps (" + gapRows.length + "):");
+      if (gapRows.length){
+        gapRows.forEach(function(r){ lines.push("  - " + (r.cap?r.cap.l2Id:"") + " " + (r.cap?r.cap.l2Name:"")); });
+      } else { lines.push("  (none)"); }
+      lines.push("");
+      lines.push("Potential overlap (" + overlapRows.length + "):");
+      if (overlapRows.length){
+        overlapRows.forEach(function(r){
+          lines.push("  - " + (r.cap?r.cap.l2Id:"") + " " + (r.cap?r.cap.l2Name:""));
+          r.apps.forEach(function(a){ lines.push("      * " + a.name + (a.vendor?" ("+a.vendor+")":"") + " — " + (a.disposition||a.installStatus||"n/a")); });
+        });
+      } else { lines.push("  (none)"); }
+      var fname = "app-reconciliation-" + (name||"untitled").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"") + ".txt";
+      fallbackDownload(lines.join("\n"), fname, "text/plain");
+    });
+  }
+
+  function wireReconcileEvents(){
+    var analyzeBtn = document.getElementById("rcAnalyzeBtn");
+    if (!analyzeBtn) return;
+    var countEl = document.getElementById("rcCapCount");
+    Array.prototype.forEach.call(document.querySelectorAll(".rc-cap-check"), function(el){
+      el.addEventListener("change", function(){
+        var n = document.querySelectorAll(".rc-cap-check:checked").length;
+        if (countEl) countEl.textContent = "— " + n + " selected";
+      });
+    });
+    analyzeBtn.addEventListener("click", function(){
+      var name = document.getElementById("rcName").value.trim();
+      var description = document.getElementById("rcDesc").value.trim();
+      var l2Ids = Array.prototype.map.call(document.querySelectorAll(".rc-cap-check:checked"), function(el){ return el.value; });
+      var results = document.getElementById("rcResults");
+      if (!name){
+        results.innerHTML = '<div class="divider"></div><div class="save-msg err">Please enter an app name before analyzing.</div>';
+        return;
+      }
+      if (!l2Ids.length){
+        results.innerHTML = '<div class="divider"></div><div class="save-msg err">Select at least one capability before analyzing.</div>';
+        return;
+      }
+      renderReconcileResults(name, description, l2Ids);
+    });
   }
 
   // ---------------- rendering: EA Framework diagram ----------------
@@ -710,9 +865,11 @@
     if (state.view === "map") body = renderMapView();
     else if (state.view === "layered") body = renderLayeredView();
     else if (state.view === "framework") body = renderFrameworkView();
+    else if (state.view === "reconcile") body = renderReconcileView();
     else body = renderUnmappedView();
     canvas.innerHTML = readonlyBanner + body;
     wireCanvasEvents();
+    wireReconcileEvents();
   }
 
   function wireCanvasEvents(){
@@ -754,12 +911,25 @@
   document.getElementById("drawerBackdrop").addEventListener("click", closeDrawer);
   document.addEventListener("keydown", function(e){ if (e.key === "Escape") closeDrawer(); });
 
-  function trmOptions(selected){
-    var opts = '<option value="">&mdash; none &mdash;</option>';
+  function trmCheckboxes(selected){
+    selected = selected || [];
+    var groups = {}, order = [];
     state.techStandards.forEach(function(t){
-      opts += '<option value="'+esc(t.name)+'"'+(t.name===selected?" selected":"")+'>'+esc(t.name)+'</option>';
+      var p = t.parentCategory || "Other";
+      if (!groups[p]){ groups[p] = []; order.push(p); }
+      groups[p].push(t);
     });
-    return opts;
+    var html = '<div class="trm-check-list">';
+    order.forEach(function(p){
+      html += '<div class="trm-parent-head">'+esc(p)+'</div>';
+      groups[p].forEach(function(t){
+        var checked = selected.indexOf(t.name) !== -1 ? " checked" : "";
+        var cid = 'trm_' + t.name.replace(/[^a-z0-9]/gi, '_');
+        html += '<label class="trm-check-row" for="'+cid+'"><input type="checkbox" id="'+cid+'" class="trm-check" value="'+esc(t.name)+'"'+checked+'>'+esc(t.name)+'</label>';
+      });
+    });
+    html += '</div>';
+    return html;
   }
   function capOptions(selected){
     var opts = "";
@@ -829,12 +999,13 @@
     html += '<div class="field-row"><label>Mapping confidence</label><div class="value">'+esc(a.reviewerConfidence||"&mdash;")+' &mdash; '+esc(a.reviewerRationale||"")+'</div></div>';
     html += '<div class="divider"></div>';
     html += '<div class="field-row"><label>Primary capability</label><select id="editCap">'+capOptions(a.primaryCapabilityId)+'</select></div>';
-    html += '<div class="field-row"><label>Technology category (TRM)</label><select id="editTrm">'+trmOptions(a.trmCategory)+'</select></div>';
+    html += '<div class="field-row"><label>Technology categories (TRM) <span class="hint-inline">&mdash; select all that apply</span></label>'+trmCheckboxes(a.trmCategories)+'</div>';
     html += '<div class="field-row"><label>Notes</label><textarea id="editNotes" placeholder="Add EA notes for this application&hellip;">'+esc(a.notes||"")+'</textarea></div>';
     html += '<div class="save-row"><button class="btn primary" id="saveBtn">Save changes</button></div><div class="save-msg" id="saveMsg"></div>';
     document.getElementById("drawerBody").innerHTML = html;
     document.getElementById("saveBtn").addEventListener("click", function(){
-      var patch = { primaryCapabilityId: document.getElementById("editCap").value, trmCategory: document.getElementById("editTrm").value || null, notes: document.getElementById("editNotes").value };
+      var trmChecked = Array.prototype.map.call(document.querySelectorAll("#drawerBody .trm-check:checked"), function(el){ return el.value; });
+      var patch = { primaryCapabilityId: document.getElementById("editCap").value, trmCategories: trmChecked, notes: document.getElementById("editNotes").value };
       var msg = document.getElementById("saveMsg");
       apiPatch("applications", a.apmNumber, patch).then(function(){
         Object.assign(a, patch); msg.className="save-msg ok"; msg.textContent="Saved."; render();
@@ -893,13 +1064,13 @@
   document.getElementById("exportBtn").addEventListener("click", function(){
     var payload = { capabilities: state.capabilities, applications: state.applications, unmapped: state.unmapped, techStandards: state.techStandards, exportedAt: new Date().toISOString() };
     var text = JSON.stringify(payload, null, 2);
-    fallbackDownload(text);
+    fallbackDownload(text, "novant-capability-map.json", "application/json");
   });
-  function fallbackDownload(text){
+  function fallbackDownload(text, filename, mime){
     try {
-      var blob = new Blob([text], {type:"application/json"});
+      var blob = new Blob([text], {type: mime || "application/json"});
       var url = URL.createObjectURL(blob);
-      var a = document.createElement("a"); a.href = url; a.download = "novant-capability-map.json";
+      var a = document.createElement("a"); a.href = url; a.download = filename || "novant-capability-map.json";
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
     } catch(e){ console.warn("download fallback failed", e); }

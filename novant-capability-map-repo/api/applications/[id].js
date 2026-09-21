@@ -1,7 +1,8 @@
 const { getSql, parseBody } = require('../_db');
 
-// PATCH /api/applications/:id — updates primaryCapabilityId, trmCategory
-// and/or notes on one application. Uses a jsonb merge (data || patch).
+// PATCH /api/applications/:id — updates primaryCapabilityId, trmCategories
+// (array of TRM category names) and/or notes on one application. Uses a
+// jsonb merge (data || patch).
 module.exports = async (req, res) => {
   if (req.method !== 'PATCH') {
     res.status(405).json({ error: 'method not allowed' });
@@ -12,7 +13,9 @@ module.exports = async (req, res) => {
 
   const patch = {};
   if (typeof body.primaryCapabilityId === 'string') patch.primaryCapabilityId = body.primaryCapabilityId;
-  if (typeof body.trmCategory === 'string' || body.trmCategory === null) patch.trmCategory = body.trmCategory;
+  if (Array.isArray(body.trmCategories) && body.trmCategories.every((t) => typeof t === 'string')) {
+    patch.trmCategories = body.trmCategories;
+  }
   if (typeof body.notes === 'string' || body.notes === null) patch.notes = body.notes;
 
   if (Object.keys(patch).length === 0) {

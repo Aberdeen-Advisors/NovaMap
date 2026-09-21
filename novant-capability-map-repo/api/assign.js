@@ -37,7 +37,7 @@ module.exports = async (req, res) => {
     reasoning: null,
     migrationStrategy: null,
     targetBusinessApplication: null,
-    trmCategory: null,
+    trmCategories: [],
     notes: null,
   };
 
