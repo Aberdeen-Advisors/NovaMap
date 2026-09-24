@@ -316,6 +316,13 @@
   .rc-result-card{border:1px solid var(--line-soft); border-radius:9px; padding:8px 10px; margin-bottom:7px; font-size:12.5px;}
   .rc-result-card.overlap{background:var(--surface);}
   .rc-overlap-apps{margin-top:6px; font-size:11.5px; color:var(--slate); padding-left:2px;}
+  .rc-mode-toggle{display:flex; gap:8px; margin-bottom:14px;}
+  .rc-mode-btn{border:1px solid var(--line); background:var(--surface-2); border-radius:8px; padding:7px 13px; font-size:12.5px; font-weight:500; color:var(--slate);}
+  .rc-mode-btn.active{background:var(--accent); color:var(--accent-ink); border-color:var(--accent);}
+  .rc-upload-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+  .rc-upload-row input[type=file]{font-size:12.5px; max-width:280px;}
+  .rc-skip-list{margin-top:8px; font-size:11.5px; color:var(--warn); max-height:120px; overflow-y:auto;}
+  .rc-bulk-row:hover{background:var(--surface-2);}
 
   @media (prefers-reduced-motion: reduce){
     .drawer, .drawer-backdrop, .l2-card{transition:none;}
@@ -363,6 +370,9 @@
   </aside>
 </main>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -409,6 +419,9 @@
     selected: null,     // {type, id} for drawer
     loadError: false    // true if the initial /api/data fetch failed
   };
+
+  var bulkParsed = null;         // {valid, skipped, headerError} from the most recent reconciliation upload
+  var bulkAnalysisResults = [];  // computed analysis for the most recent "Analyze all" run
 
   function byId(arr, key){ var m = {}; arr.forEach(function(x){ m[x[key]] = x; }); return m; }
   function esc(s){ if(s===null||s===undefined) return ""; return String(s).replace(/[&<>"']/g, function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];}); }
@@ -654,7 +667,13 @@
   }
 
   function renderReconcileView(){
-    var html = '<div class="layer"><div class="layer-label">New App Reconciliation <span class="hint">&mdash; describe a candidate app, pick the capabilities it would offer, and see how it fits the current landscape</span></div>';
+    var html = '<div class="layer"><div class="layer-label">New App Reconciliation <span class="hint">&mdash; describe a candidate app (or upload a list), pick the capabilities it would offer, and see how it fits the current landscape</span></div>';
+    html += '<div class="rc-mode-toggle">'+
+      '<button class="rc-mode-btn active" data-mode="manual">Enter one app</button>'+
+      '<button class="rc-mode-btn" data-mode="bulk">Upload a list</button>'+
+    '</div>';
+
+    html += '<div class="rc-panel" id="rcManualPanel">';
     html += '<div class="rc-form">';
     html += '<div class="field-row"><label>App name</label><input type="text" id="rcName" placeholder="e.g. Acme Referral Manager"></div>';
     html += '<div class="field-row"><label>Description</label><textarea id="rcDesc" placeholder="What does this app do?"></textarea></div>';
@@ -663,10 +682,24 @@
     html += '</div>';
     html += '<div id="rcResults"></div>';
     html += '</div>';
+
+    html += '<div class="rc-panel" id="rcBulkPanel" style="display:none;">';
+    html += '<div class="rc-form">';
+    html += '<div class="field-row"><label>Upload a spreadsheet <span class="hint-inline">&mdash; columns: name, description, capabilities (capability IDs, separated by comma or semicolon)</span></label>';
+    html += '<div class="rc-upload-row"><input type="file" id="rcFileInput" accept=".xlsx,.xls,.csv"><a href="/reconciliation-template.csv" download="reconciliation-template.csv" class="btn">Download template</a></div></div>';
+    html += '<div id="rcUploadStatus" class="empty-note">No file selected yet.</div>';
+    html += '<div class="save-row"><button class="btn primary" id="rcBulkAnalyzeBtn" disabled>Analyze all</button> <button class="btn" id="rcBulkPdfBtn" style="display:none;">Export PDF</button></div>';
+    html += '</div>';
+    html += '<div id="rcBulkResults"></div>';
+    html += '</div>';
+
+    html += '</div>';
     return html;
   }
 
-  function renderReconcileResults(name, description, l2Ids){
+  // Shared rules-based fit analysis for one app's selected capabilities — used by
+  // both the manual form and each row of a bulk upload.
+  function computeReconcileAnalysis(l2Ids){
     var rows = l2Ids.map(function(l2Id){
       var c = state.capabilities.filter(function(x){ return x.l2Id === l2Id; })[0];
       var apps = appsForCapability(l2Id);
@@ -683,13 +716,13 @@
     } else {
       verdict = "Mixed fit — " + gapRows.length + " capabilit" + (gapRows.length===1?"y":"ies") + " look like gap(s), " + overlapRows.length + " already ha" + (overlapRows.length===1?"s":"ve") + " supporting app(s).";
     }
+    return {rows:rows, overlapRows:overlapRows, gapRows:gapRows, verdict:verdict};
+  }
 
-    var html = '<div class="divider"></div>';
-    html += '<div class="rc-verdict">'+esc(verdict)+'</div>';
-
-    html += '<div class="field-row"><label>Capability gaps ('+gapRows.length+') <span class="hint-inline">&mdash; additive fit</span></label>';
-    if (gapRows.length){
-      gapRows.forEach(function(r){
+  function renderAnalysisSectionsHtml(analysis){
+    var html = '<div class="field-row"><label>Capability gaps ('+analysis.gapRows.length+') <span class="hint-inline">&mdash; additive fit</span></label>';
+    if (analysis.gapRows.length){
+      analysis.gapRows.forEach(function(r){
         html += '<div class="rc-result-card gap"><span class="pill" style="background:var(--good-soft);color:var(--good)">Gap</span> <span class="mono">'+esc(r.cap ? r.cap.l2Id : "")+'</span> '+esc(r.cap ? r.cap.l2Name : "")+'</div>';
       });
     } else {
@@ -697,9 +730,9 @@
     }
     html += '</div>';
 
-    html += '<div class="field-row"><label>Potential overlap ('+overlapRows.length+') <span class="hint-inline">&mdash; existing apps already serving this capability</span></label>';
-    if (overlapRows.length){
-      overlapRows.forEach(function(r){
+    html += '<div class="field-row"><label>Potential overlap ('+analysis.overlapRows.length+') <span class="hint-inline">&mdash; existing apps already serving this capability</span></label>';
+    if (analysis.overlapRows.length){
+      analysis.overlapRows.forEach(function(r){
         html += '<div class="rc-result-card overlap"><div><span class="pill" style="background:var(--warn-soft);color:var(--warn)">Overlap</span> <span class="mono">'+esc(r.cap ? r.cap.l2Id : "")+'</span> '+esc(r.cap ? r.cap.l2Name : "")+'</div>';
         html += '<div class="rc-overlap-apps">'+r.apps.map(function(a){ return esc(a.name) + (a.vendor ? " ("+esc(a.vendor)+")" : "") + " — " + esc(a.disposition||a.installStatus||"n/a"); }).join("<br>")+'</div></div>';
       });
@@ -707,40 +740,234 @@
       html += '<div class="empty-note">None &mdash; no existing apps currently serve any of the selected capabilities.</div>';
     }
     html += '</div>';
+    return html;
+  }
 
-    html += '<div class="save-row"><button class="btn" id="rcExportBtn">Export analysis</button></div>';
+  function slugify(s){
+    return ((s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"")) || "untitled";
+  }
+
+  function buildReconcileTextReport(name, description, analysis){
+    var lines = [];
+    lines.push("New App Reconciliation");
+    lines.push("App name: " + name);
+    lines.push("Description: " + description);
+    lines.push("Generated: " + new Date().toISOString());
+    lines.push("");
+    lines.push("Verdict: " + analysis.verdict);
+    lines.push("");
+    lines.push("Capability gaps (" + analysis.gapRows.length + "):");
+    if (analysis.gapRows.length){
+      analysis.gapRows.forEach(function(r){ lines.push("  - " + (r.cap?r.cap.l2Id:"") + " " + (r.cap?r.cap.l2Name:"")); });
+    } else { lines.push("  (none)"); }
+    lines.push("");
+    lines.push("Potential overlap (" + analysis.overlapRows.length + "):");
+    if (analysis.overlapRows.length){
+      analysis.overlapRows.forEach(function(r){
+        lines.push("  - " + (r.cap?r.cap.l2Id:"") + " " + (r.cap?r.cap.l2Name:""));
+        r.apps.forEach(function(a){ lines.push("      * " + a.name + (a.vendor?" ("+a.vendor+")":"") + " — " + (a.disposition||a.installStatus||"n/a")); });
+      });
+    } else { lines.push("  (none)"); }
+    return lines.join("\n");
+  }
+
+  function renderReconcileResults(name, description, l2Ids){
+    var analysis = computeReconcileAnalysis(l2Ids);
+    var html = '<div class="divider"></div>';
+    html += '<div class="rc-verdict">'+esc(analysis.verdict)+'</div>';
+    html += renderAnalysisSectionsHtml(analysis);
+    html += '<div class="save-row"><button class="btn" id="rcExportBtn">Export as text</button> <button class="btn" id="rcExportPdfBtn">Export as PDF</button></div>';
 
     document.getElementById("rcResults").innerHTML = html;
 
     document.getElementById("rcExportBtn").addEventListener("click", function(){
-      var lines = [];
-      lines.push("New App Reconciliation");
-      lines.push("App name: " + name);
-      lines.push("Description: " + description);
-      lines.push("Generated: " + new Date().toISOString());
-      lines.push("");
-      lines.push("Verdict: " + verdict);
-      lines.push("");
-      lines.push("Capability gaps (" + gapRows.length + "):");
-      if (gapRows.length){
-        gapRows.forEach(function(r){ lines.push("  - " + (r.cap?r.cap.l2Id:"") + " " + (r.cap?r.cap.l2Name:"")); });
-      } else { lines.push("  (none)"); }
-      lines.push("");
-      lines.push("Potential overlap (" + overlapRows.length + "):");
-      if (overlapRows.length){
-        overlapRows.forEach(function(r){
-          lines.push("  - " + (r.cap?r.cap.l2Id:"") + " " + (r.cap?r.cap.l2Name:""));
-          r.apps.forEach(function(a){ lines.push("      * " + a.name + (a.vendor?" ("+a.vendor+")":"") + " — " + (a.disposition||a.installStatus||"n/a")); });
+      var fname = "app-reconciliation-" + slugify(name) + ".txt";
+      fallbackDownload(buildReconcileTextReport(name, description, analysis), fname, "text/plain");
+    });
+    document.getElementById("rcExportPdfBtn").addEventListener("click", function(){
+      var doc = new jspdf.jsPDF();
+      buildReconcilePdfDoc(doc, [{name:name, description:description, analysis:analysis}], false);
+      doc.save("app-reconciliation-" + slugify(name) + ".pdf");
+    });
+  }
+
+  // ---------------- new app reconciliation: bulk upload ----------------
+  function findHeaderKey(row, candidates){
+    var keys = Object.keys(row);
+    for (var i=0;i<keys.length;i++){
+      var norm = keys[i].toString().trim().toLowerCase();
+      if (candidates.indexOf(norm) !== -1) return keys[i];
+    }
+    return null;
+  }
+
+  function parseBulkRows(rawRows){
+    var valid = [], skipped = [];
+    if (!rawRows.length){
+      return {valid:valid, skipped:skipped, headerError:"That file has no data rows."};
+    }
+    var nameKey = findHeaderKey(rawRows[0], ["name","app name","appname"]);
+    var descKey = findHeaderKey(rawRows[0], ["description","desc"]);
+    var capKey = findHeaderKey(rawRows[0], ["capabilities","capability","capability ids","capabilityids"]);
+    if (!nameKey || !capKey){
+      return {valid:valid, skipped:skipped, headerError:"Couldn't find the required columns. Expected headers: name, description, capabilities."};
+    }
+    var byId = {};
+    state.capabilities.forEach(function(c){ byId[c.l2Id.toLowerCase()] = c; });
+
+    rawRows.forEach(function(row, idx){
+      var name = (row[nameKey]==null?"":row[nameKey]).toString().trim();
+      var description = descKey ? (row[descKey]==null?"":row[descKey]).toString().trim() : "";
+      var capRaw = (row[capKey]==null?"":row[capKey]).toString();
+      var tokens = capRaw.split(/[,;\n]+/).map(function(t){ return t.trim(); }).filter(function(t){ return t; });
+      var resolved = [], unresolved = [];
+      tokens.forEach(function(t){
+        var c = byId[t.toLowerCase()];
+        if (c) resolved.push(c.l2Id); else unresolved.push(t);
+      });
+      var rowNum = idx + 2; // header is row 1
+      if (!name){
+        skipped.push({row:rowNum, reason:"no app name"});
+        return;
+      }
+      if (!resolved.length){
+        skipped.push({row:rowNum, name:name, reason:"no recognized capability IDs" + (unresolved.length ? " (got: " + unresolved.join(", ") + ")" : "")});
+        return;
+      }
+      valid.push({name:name, description:description, l2Ids:resolved, unresolved:unresolved, rowNum:rowNum});
+    });
+    return {valid:valid, skipped:skipped, headerError:null};
+  }
+
+  function renderBulkUploadSummary(parsed, filename){
+    var statusEl = document.getElementById("rcUploadStatus");
+    if (!statusEl) return;
+    if (parsed.headerError){
+      statusEl.innerHTML = '<span class="save-msg err">'+esc(parsed.headerError)+'</span>';
+      return;
+    }
+    var html = esc(filename) + ' &mdash; ' + parsed.valid.length + ' app(s) ready to analyze';
+    if (parsed.skipped.length) html += ', ' + parsed.skipped.length + ' skipped';
+    html += '.';
+    if (parsed.skipped.length){
+      html += '<div class="rc-skip-list">';
+      parsed.skipped.forEach(function(s){
+        html += '<div>Row ' + s.row + (s.name?(' ("'+esc(s.name)+'")'):'') + ': ' + esc(s.reason) + '</div>';
+      });
+      html += '</div>';
+    }
+    statusEl.innerHTML = html;
+    statusEl.className = "";
+  }
+
+  function renderBulkResultsTable(results){
+    var html = '<div class="divider"></div>';
+    html += '<div class="field-row"><label>Results ('+results.length+' app(s) analyzed) <span class="hint-inline">&mdash; click a row for the full breakdown</span></label></div>';
+    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">';
+    html += '<thead><tr style="text-align:left;color:var(--slate-2);font-size:11px;text-transform:uppercase;letter-spacing:.03em;">'+
+      '<th style="padding:6px 8px;">App</th><th style="padding:6px 8px;">Verdict</th><th style="padding:6px 8px;">Gaps</th><th style="padding:6px 8px;">Overlaps</th></tr></thead><tbody>';
+    results.forEach(function(r, idx){
+      html += '<tr class="rc-bulk-row" data-idx="'+idx+'" style="border-top:1px solid var(--line-soft);cursor:pointer;">'+
+        '<td style="padding:7px 8px;">'+esc(r.name)+'</td>'+
+        '<td style="padding:7px 8px;">'+esc(r.analysis.verdict)+'</td>'+
+        '<td style="padding:7px 8px;">'+r.analysis.gapRows.length+'</td>'+
+        '<td style="padding:7px 8px;">'+r.analysis.overlapRows.length+'</td></tr>';
+      html += '<tr class="rc-bulk-detail-row" data-idx="'+idx+'" style="display:none;"><td colspan="4" style="padding:4px 8px 14px;">'+renderAnalysisSectionsHtml(r.analysis)+'</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    document.getElementById("rcBulkResults").innerHTML = html;
+
+    Array.prototype.forEach.call(document.querySelectorAll(".rc-bulk-row"), function(el){
+      el.addEventListener("click", function(){
+        var idx = el.getAttribute("data-idx");
+        var detail = document.querySelector('.rc-bulk-detail-row[data-idx="'+idx+'"]');
+        if (detail) detail.style.display = (detail.style.display === "none") ? "" : "none";
+      });
+    });
+  }
+
+  // Builds a reconciliation PDF into an existing jsPDF doc. `results` is an array of
+  // {name, description, analysis}. withSummary adds a cover page with a summary table
+  // before each app's own detail page (used for batch exports).
+  function buildReconcilePdfDoc(doc, results, withSummary){
+    var margin = 14;
+    var pageWidth = doc.internal.pageSize.getWidth();
+    var y = 18;
+    doc.setFontSize(16); doc.text("New App Reconciliation", margin, y); y += 7;
+    doc.setFontSize(10); doc.setTextColor(120);
+    doc.text("Generated " + new Date().toLocaleString(), margin, y); y += 8;
+    doc.setTextColor(0);
+
+    if (withSummary){
+      doc.autoTable({
+        startY: y,
+        margin: {left:margin, right:margin},
+        head: [["App", "Verdict", "Gaps", "Overlaps"]],
+        body: results.map(function(r){
+          return [r.name, r.analysis.verdict, String(r.analysis.gapRows.length), String(r.analysis.overlapRows.length)];
+        }),
+        styles: {fontSize:9},
+        headStyles: {fillColor:[142,68,173]}
+      });
+      y = doc.lastAutoTable.finalY + 10;
+    }
+
+    results.forEach(function(r, idx){
+      if (idx > 0 || withSummary){ doc.addPage(); y = 18; }
+      doc.setFontSize(13); doc.setFont(undefined, "bold");
+      doc.text(r.name || "(untitled app)", margin, y); y += 7;
+      doc.setFont(undefined, "normal"); doc.setFontSize(10);
+      if (r.description){
+        var descLines = doc.splitTextToSize(r.description, pageWidth - margin*2);
+        doc.text(descLines, margin, y); y += 5*descLines.length + 2;
+      }
+      doc.setFont(undefined, "bold");
+      var verdictLines = doc.splitTextToSize("Verdict: " + r.analysis.verdict, pageWidth - margin*2);
+      doc.text(verdictLines, margin, y); y += 5*verdictLines.length + 4;
+      doc.setFont(undefined, "normal");
+
+      if (r.analysis.gapRows.length){
+        doc.autoTable({
+          startY: y, margin:{left:margin, right:margin},
+          head: [["Capability gap (additive fit)", "ID"]],
+          body: r.analysis.gapRows.map(function(g){ return [g.cap?g.cap.l2Name:"", g.cap?g.cap.l2Id:""]; }),
+          styles:{fontSize:9}, headStyles:{fillColor:[30,125,79]}
         });
-      } else { lines.push("  (none)"); }
-      var fname = "app-reconciliation-" + (name||"untitled").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"") + ".txt";
-      fallbackDownload(lines.join("\n"), fname, "text/plain");
+        y = doc.lastAutoTable.finalY + 6;
+      } else {
+        doc.setFontSize(9); doc.text("No capability gaps — every selected capability already has a supporting app.", margin, y); y += 8;
+      }
+
+      if (r.analysis.overlapRows.length){
+        doc.autoTable({
+          startY: y, margin:{left:margin, right:margin},
+          head: [["Potential overlap", "ID", "Existing app(s)"]],
+          body: r.analysis.overlapRows.map(function(o){
+            return [o.cap?o.cap.l2Name:"", o.cap?o.cap.l2Id:"", o.apps.map(function(a){ return a.name + (a.vendor?" ("+a.vendor+")":""); }).join("; ")];
+          }),
+          styles:{fontSize:9}, headStyles:{fillColor:[154,107,12]}
+        });
+        y = doc.lastAutoTable.finalY + 6;
+      } else {
+        doc.setFontSize(9); doc.text("No existing apps overlap with the selected capabilities.", margin, y); y += 8;
+      }
     });
   }
 
   function wireReconcileEvents(){
     var analyzeBtn = document.getElementById("rcAnalyzeBtn");
     if (!analyzeBtn) return;
+
+    Array.prototype.forEach.call(document.querySelectorAll(".rc-mode-btn"), function(btn){
+      btn.addEventListener("click", function(){
+        Array.prototype.forEach.call(document.querySelectorAll(".rc-mode-btn"), function(b){ b.classList.remove("active"); });
+        btn.classList.add("active");
+        var mode = btn.getAttribute("data-mode");
+        document.getElementById("rcManualPanel").style.display = (mode === "manual") ? "" : "none";
+        document.getElementById("rcBulkPanel").style.display = (mode === "bulk") ? "" : "none";
+      });
+    });
+
     var countEl = document.getElementById("rcCapCount");
     Array.prototype.forEach.call(document.querySelectorAll(".rc-cap-check"), function(el){
       el.addEventListener("change", function(){
@@ -762,6 +989,62 @@
         return;
       }
       renderReconcileResults(name, description, l2Ids);
+    });
+
+    var fileInput = document.getElementById("rcFileInput");
+    var bulkAnalyzeBtn = document.getElementById("rcBulkAnalyzeBtn");
+    var bulkPdfBtn = document.getElementById("rcBulkPdfBtn");
+
+    fileInput.addEventListener("change", function(e){
+      var file = e.target.files && e.target.files[0];
+      var statusEl = document.getElementById("rcUploadStatus");
+      bulkParsed = null;
+      bulkAnalysisResults = [];
+      bulkAnalyzeBtn.disabled = true;
+      bulkPdfBtn.style.display = "none";
+      document.getElementById("rcBulkResults").innerHTML = "";
+      if (!file){
+        statusEl.textContent = "No file selected yet.";
+        statusEl.className = "empty-note";
+        return;
+      }
+      statusEl.textContent = "Reading " + file.name + "…";
+      statusEl.className = "empty-note";
+      var reader = new FileReader();
+      reader.onload = function(evt){
+        try {
+          var wb = XLSX.read(evt.target.result, {type:"array"});
+          var sheet = wb.Sheets[wb.SheetNames[0]];
+          var rawRows = XLSX.utils.sheet_to_json(sheet, {defval:""});
+          var parsed = parseBulkRows(rawRows);
+          bulkParsed = parsed;
+          renderBulkUploadSummary(parsed, file.name);
+          bulkAnalyzeBtn.disabled = parsed.valid.length === 0;
+        } catch(err){
+          console.warn("reconciliation upload parse failed", err);
+          statusEl.innerHTML = '<span class="save-msg err">Couldn’t read that file. Make sure it’s a .xlsx, .xls, or .csv file with name, description, and capabilities columns.</span>';
+        }
+      };
+      reader.onerror = function(){
+        statusEl.innerHTML = '<span class="save-msg err">Couldn’t read that file.</span>';
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    bulkAnalyzeBtn.addEventListener("click", function(){
+      if (!bulkParsed || !bulkParsed.valid.length) return;
+      bulkAnalysisResults = bulkParsed.valid.map(function(item){
+        return {name:item.name, description:item.description, analysis:computeReconcileAnalysis(item.l2Ids)};
+      });
+      renderBulkResultsTable(bulkAnalysisResults);
+      bulkPdfBtn.style.display = "";
+    });
+
+    bulkPdfBtn.addEventListener("click", function(){
+      if (!bulkAnalysisResults.length) return;
+      var doc = new jspdf.jsPDF();
+      buildReconcilePdfDoc(doc, bulkAnalysisResults, true);
+      doc.save("app-reconciliation-batch.pdf");
     });
   }
 
