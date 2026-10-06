@@ -323,6 +323,19 @@
   .rc-upload-row input[type=file]{font-size:12.5px; max-width:280px;}
   .rc-skip-list{margin-top:8px; font-size:11.5px; color:var(--warn); max-height:120px; overflow-y:auto;}
   .rc-bulk-row:hover{background:var(--surface-2);}
+  .rc-bulk-app-block{margin-bottom:6px;}
+  .rc-bulk-app-block h3{font-size:14px; margin-bottom:8px;}
+
+  /* ---------- Demand Backlog ---------- */
+  .dm-chart-wrap{position:relative; height:340px; max-width:900px; margin-bottom:6px;}
+  .dm-cap-block{margin-bottom:22px; padding-bottom:16px; border-bottom:1px solid var(--line-soft);}
+  .dm-cap-block:last-child{border-bottom:none;}
+  .dm-cap-block h3{font-size:14px; margin-bottom:6px;}
+  .dm-demand-card{border:1px solid var(--line-soft); border-radius:9px; padding:10px 12px; margin-bottom:8px; font-size:12.5px; background:var(--surface-2);}
+  .dm-demand-head{display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:600; margin-bottom:4px;}
+  .dm-demand-meta{font-size:11px; color:var(--slate-2); margin-bottom:6px;}
+  .dm-demand-field{margin-bottom:4px; color:var(--slate); line-height:1.5;}
+  .dm-demand-field b{color:var(--ink); font-weight:600;}
 
   @media (prefers-reduced-motion: reduce){
     .drawer, .drawer-backdrop, .l2-card{transition:none;}
@@ -349,6 +362,7 @@
     <button data-view="framework">EA Framework</button>
     <button data-view="unmapped">Unmapped Apps</button>
     <button data-view="reconcile">New App Reconciliation</button>
+    <button data-view="demand">Demand Backlog</button>
   </div>
   <button class="icon-btn" id="exportBtn" title="Download current dataset as JSON">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 19h16"/></svg>
@@ -373,6 +387,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -413,6 +428,7 @@
     applications: [],   // array of application docs (mapped/in-scope)
     unmapped: [],        // array of unmapped app entries
     techStandards: [],
+    demand: [],          // array of demand backlog items (active + capability-mapped)
     view: "map",
     search: "",
     selectedL1: null,   // for layered view drill-down
@@ -422,6 +438,7 @@
 
   var bulkParsed = null;         // {valid, skipped, headerError} from the most recent reconciliation upload
   var bulkAnalysisResults = [];  // computed analysis for the most recent "Analyze all" run
+  var demandCharts = {};         // Chart.js instances on the Demand Backlog page, keyed by canvas id
 
   function byId(arr, key){ var m = {}; arr.forEach(function(x){ m[x[key]] = x; }); return m; }
   function esc(s){ if(s===null||s===undefined) return ""; return String(s).replace(/[&<>"']/g, function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];}); }
@@ -436,6 +453,7 @@
       state.applications = res.applications || [];
       state.unmapped = res.unmapped || [];
       state.techStandards = res.techStandards || [];
+      state.demand = res.demand || [];
       state.loadError = false;
     }).catch(function(e){
       console.warn("failed to load /api/data", e);
@@ -862,28 +880,32 @@
 
   function renderBulkResultsTable(results){
     var html = '<div class="divider"></div>';
-    html += '<div class="field-row"><label>Results ('+results.length+' app(s) analyzed) <span class="hint-inline">&mdash; click a row for the full breakdown</span></label></div>';
-    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">';
+    html += '<div class="field-row"><label>Results ('+results.length+' app(s) analyzed)</label></div>';
+
+    // Quick scannable overview first...
+    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:18px;">';
     html += '<thead><tr style="text-align:left;color:var(--slate-2);font-size:11px;text-transform:uppercase;letter-spacing:.03em;">'+
       '<th style="padding:6px 8px;">App</th><th style="padding:6px 8px;">Verdict</th><th style="padding:6px 8px;">Gaps</th><th style="padding:6px 8px;">Overlaps</th></tr></thead><tbody>';
-    results.forEach(function(r, idx){
-      html += '<tr class="rc-bulk-row" data-idx="'+idx+'" style="border-top:1px solid var(--line-soft);cursor:pointer;">'+
+    results.forEach(function(r){
+      html += '<tr style="border-top:1px solid var(--line-soft);">'+
         '<td style="padding:7px 8px;">'+esc(r.name)+'</td>'+
         '<td style="padding:7px 8px;">'+esc(r.analysis.verdict)+'</td>'+
         '<td style="padding:7px 8px;">'+r.analysis.gapRows.length+'</td>'+
         '<td style="padding:7px 8px;">'+r.analysis.overlapRows.length+'</td></tr>';
-      html += '<tr class="rc-bulk-detail-row" data-idx="'+idx+'" style="display:none;"><td colspan="4" style="padding:4px 8px 14px;">'+renderAnalysisSectionsHtml(r.analysis)+'</td></tr>';
     });
     html += '</tbody></table></div>';
-    document.getElementById("rcBulkResults").innerHTML = html;
 
-    Array.prototype.forEach.call(document.querySelectorAll(".rc-bulk-row"), function(el){
-      el.addEventListener("click", function(){
-        var idx = el.getAttribute("data-idx");
-        var detail = document.querySelector('.rc-bulk-detail-row[data-idx="'+idx+'"]');
-        if (detail) detail.style.display = (detail.style.display === "none") ? "" : "none";
-      });
+    // ...then every app's full breakdown, stacked, exactly like the single-app view.
+    results.forEach(function(r){
+      html += '<div class="rc-bulk-app-block">';
+      html += '<h3>'+esc(r.name)+'</h3>';
+      if (r.description) html += '<div class="empty-note" style="font-style:normal;margin-bottom:10px;">'+esc(r.description)+'</div>';
+      html += '<div class="rc-verdict">'+esc(r.analysis.verdict)+'</div>';
+      html += renderAnalysisSectionsHtml(r.analysis);
+      html += '</div><div class="divider"></div>';
     });
+
+    document.getElementById("rcBulkResults").innerHTML = html;
   }
 
   // Builds a reconciliation PDF into an existing jsPDF doc. `results` is an array of
@@ -1048,6 +1070,229 @@
     });
   }
 
+  // ---------------- rendering: demand backlog reconciliation ----------------
+  function cssVar(name){
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function demandCapabilityGroups(){
+    var map = {}, order = [];
+    state.demand.forEach(function(d){
+      var key = d.primaryCapabilityId;
+      if (!key) return;
+      if (!map[key]){ map[key] = []; order.push(key); }
+      map[key].push(d);
+    });
+    return order.map(function(l2Id){
+      var cap = state.capabilities.filter(function(c){ return c.l2Id === l2Id; })[0];
+      return {l2Id:l2Id, cap:cap, demands:map[l2Id], apps:appsForCapability(l2Id)};
+    });
+  }
+
+  // Pure rules, no AI call: a gap with decent mapping confidence is worth prioritizing;
+  // a capability already carrying 3+ apps is likely redundant effort; everything else
+  // needs an SME look before deciding either way.
+  function demandRecommendationTier(g){
+    var appCount = g.apps.length;
+    var hasDecentConfidence = g.demands.some(function(d){ return d.confidence === "High" || d.confidence === "Medium"; });
+    if (appCount === 0 && hasDecentConfidence) return "prioritize";
+    if (appCount >= 3) return "deprioritize";
+    return "validate";
+  }
+
+  function buildDemandRecommendations(){
+    var groups = demandCapabilityGroups();
+    var prioritize = [], validate = [], deprioritize = [];
+    groups.forEach(function(g){
+      var tier = demandRecommendationTier(g);
+      if (tier === "prioritize") prioritize.push(g);
+      else if (tier === "deprioritize") deprioritize.push(g);
+      else validate.push(g);
+    });
+    prioritize.sort(function(a,b){ return b.demands.length - a.demands.length; });
+    deprioritize.sort(function(a,b){ return b.apps.length - a.apps.length; });
+    validate.sort(function(a,b){ return b.demands.length - a.demands.length; });
+    return {prioritize:prioritize, validate:validate, deprioritize:deprioritize};
+  }
+
+  function demandCountForL1(l1Id){
+    var l2ids = state.capabilities.filter(function(c){ return c.l1Id === l1Id; }).map(function(c){ return c.l2Id; });
+    return state.demand.filter(function(d){ return l2ids.indexOf(d.primaryCapabilityId) !== -1; }).length;
+  }
+
+  function topL1ByDemand(n){
+    var l1s = [];
+    domainOrder().forEach(function(d){ l1Groups(d.domain).forEach(function(g){ l1s.push(g); }); });
+    var withCounts = l1s.map(function(g){
+      return {l1Id:g.l1Id, l1Name:g.l1Name, demandCount:demandCountForL1(g.l1Id), appCount:appsForL1(g.l1Id).length};
+    }).filter(function(x){ return x.demandCount > 0; });
+    withCounts.sort(function(a,b){ return b.demandCount - a.demandCount; });
+    return withCounts.slice(0, n);
+  }
+
+  function topCapabilitiesByDemand(n){
+    var groups = demandCapabilityGroups();
+    groups.sort(function(a,b){ return b.demands.length - a.demands.length; });
+    return groups.slice(0, n);
+  }
+
+  function demandRecRationale(tier, g){
+    if (tier === "prioritize"){
+      return g.demands.length > 1
+        ? (g.demands.length + " independent demands target this capability gap — a strong signal of real need.")
+        : "No supporting app today, and the mapping confidence behind this demand is solid.";
+    }
+    if (tier === "deprioritize"){
+      return g.apps.length + " app" + (g.apps.length===1?"":"s") + " already serve" + (g.apps.length===1?"s":"") + " this capability — validate the business case before funding more work here.";
+    }
+    return "Thin coverage (" + g.apps.length + " app" + (g.apps.length===1?"":"s") + ") or uncertain mapping confidence — get SME input before prioritizing either way.";
+  }
+
+  function demandRecGroupCardHtml(g, tier){
+    var cls = tier === "prioritize" ? "gap" : (tier === "deprioritize" ? "overlap" : "");
+    var html = '<div class="rc-result-card ' + cls + '">';
+    html += '<div><span class="mono">'+esc(g.l2Id)+'</span> '+esc(g.cap?g.cap.l2Name:"")+'</div>';
+    html += '<div class="rc-overlap-apps">'+esc(demandRecRationale(tier, g))+'</div>';
+    html += '<div class="rc-overlap-apps">Demand(s): '+g.demands.map(function(d){ return esc(d.name); }).join("; ")+'</div>';
+    html += '</div>';
+    return html;
+  }
+
+  function renderDemandRecommendationsHtml(recs){
+    var html = '<div class="layer"><div class="layer-label">Recommendations <span class="hint">&mdash; rules-based from capability gap/overlap fit, no AI scoring</span></div>';
+
+    html += '<div class="field-row"><label>Prioritize ('+recs.prioritize.length+') <span class="hint-inline">&mdash; fills a real capability gap</span></label>';
+    html += recs.prioritize.length ? recs.prioritize.map(function(g){ return demandRecGroupCardHtml(g,"prioritize"); }).join("") : '<div class="empty-note">No backlog items currently target an unfilled capability with solid mapping confidence.</div>';
+    html += '</div>';
+
+    html += '<div class="field-row"><label>Needs validation ('+recs.validate.length+') <span class="hint-inline">&mdash; thin coverage or uncertain mapping</span></label>';
+    html += recs.validate.length ? recs.validate.map(function(g){ return demandRecGroupCardHtml(g,"validate"); }).join("") : '<div class="empty-note">Nothing in this tier.</div>';
+    html += '</div>';
+
+    html += '<div class="field-row"><label>Deprioritize / likely redundant ('+recs.deprioritize.length+') <span class="hint-inline">&mdash; capability already well covered</span></label>';
+    html += recs.deprioritize.length ? recs.deprioritize.map(function(g){ return demandRecGroupCardHtml(g,"deprioritize"); }).join("") : '<div class="empty-note">Nothing in this tier.</div>';
+    html += '</div>';
+
+    html += '</div>';
+    return html;
+  }
+
+  function renderDemandDetailHtml(groups){
+    var sorted = groups.slice().sort(function(a,b){ return b.demands.length - a.demands.length; });
+    var html = '<div class="layer"><div class="layer-label">Detail by capability <span class="hint">&mdash; '+groups.length+' capabilities touched by the active backlog, most-targeted first</span></div>';
+    sorted.forEach(function(g){
+      var verdict = g.apps.length === 0
+        ? "Gap — no current app serves this capability."
+        : g.apps.length + " current app" + (g.apps.length===1?"":"s") + " already serve" + (g.apps.length===1?"s":"") + " this capability.";
+      html += '<div class="dm-cap-block">';
+      html += '<h3><span class="mono">'+esc(g.l2Id)+'</span> '+esc(g.cap?g.cap.l2Name:"")+'</h3>';
+      html += '<div class="rc-verdict" style="margin-bottom:10px;">'+esc(verdict)+'</div>';
+      if (g.apps.length){
+        html += '<div class="rc-overlap-apps" style="margin-bottom:10px;">Existing: '+g.apps.map(function(a){ return esc(a.name) + (a.vendor?" ("+esc(a.vendor)+")":""); }).join("; ")+'</div>';
+      }
+      html += '<div class="field-row"><label>Backlog demand(s) ('+g.demands.length+')</label>';
+      g.demands.forEach(function(d){
+        html += '<div class="dm-demand-card">';
+        html += '<div class="dm-demand-head"><span>'+esc(d.name)+'</span><span class="pill" style="background:var(--neutral-soft);color:var(--slate)">'+esc(d.state||"")+'</span></div>';
+        html += '<div class="dm-demand-meta">'+esc(d.demandNumber)+(d.type?" &middot; "+esc(d.type):"")+(d.category?" &middot; "+esc(d.category):"")+(d.portfolio?" &middot; "+esc(d.portfolio):"")+(d.confidence?" &middot; confidence: "+esc(d.confidence):"")+'</div>';
+        if (d.description) html += '<div class="dm-demand-field"><b>Description:</b> '+esc(d.description)+'</div>';
+        if (d.businessCase) html += '<div class="dm-demand-field"><b>Business case:</b> '+esc(d.businessCase)+'</div>';
+        if (d.namedAppsHint) html += '<div class="dm-demand-field"><b>Named app hint:</b> '+esc(d.namedAppsHint)+'</div>';
+        if (d.rationale) html += '<div class="dm-demand-field"><b>Rationale:</b> '+esc(d.rationale)+'</div>';
+        if (d.secondaryCapabilityId){
+          var sc = state.capabilities.filter(function(c){ return c.l2Id === d.secondaryCapabilityId; })[0];
+          html += '<div class="dm-demand-field"><b>Also touches:</b> '+esc(d.secondaryCapabilityId)+(sc?(" — "+esc(sc.l2Name)):"")+'</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function renderDemandView(){
+    var groups = demandCapabilityGroups();
+    var recs = buildDemandRecommendations();
+    var gapGroups = groups.filter(function(g){ return g.apps.length === 0; });
+    var gapDemandCount = gapGroups.reduce(function(sum,g){ return sum + g.demands.length; }, 0);
+
+    var html = '<div class="layer"><div class="layer-label">Demand Backlog <span class="hint">&mdash; how the active, capability-mapped demand backlog lines up against the current application landscape</span></div>';
+    html += '<div class="stats">';
+    html += '<div class="stat-chip"><b>'+state.demand.length+'</b><span>active backlog items</span></div>';
+    html += '<div class="stat-chip"><b>'+groups.length+'</b><span>capabilities targeted</span></div>';
+    html += '<div class="stat-chip"><b>'+gapGroups.length+'</b><span>capability gaps touched</span></div>';
+    html += '<div class="stat-chip"><b>'+gapDemandCount+'</b><span>demand items filling a gap</span></div>';
+    html += '</div>';
+    html += '</div>';
+
+    html += '<div class="layer"><div class="layer-label">Current apps vs. backlog demand, by L1 group <span class="hint">&mdash; top 15 L1 groups by backlog volume</span></div>';
+    html += '<div class="dm-chart-wrap"><canvas id="demandL1Chart"></canvas></div>';
+    html += '</div>';
+
+    html += '<div class="layer"><div class="layer-label">Top capabilities by backlog demand <span class="hint">&mdash; current apps vs. demand count</span></div>';
+    html += '<div class="dm-chart-wrap"><canvas id="demandL2Chart"></canvas></div>';
+    html += '</div>';
+
+    html += renderDemandRecommendationsHtml(recs);
+    html += renderDemandDetailHtml(groups);
+    return html;
+  }
+
+  function wireDemandCharts(){
+    if (typeof Chart === "undefined") return;
+    Object.keys(demandCharts).forEach(function(k){ if (demandCharts[k]) demandCharts[k].destroy(); });
+    demandCharts = {};
+
+    var tickColor = cssVar("--ink") || "#1C1926";
+    var gridColor = cssVar("--line-soft") || "#EDE7F2";
+    var appsColor = cssVar("--accent") || "#8E44AD";
+    var demandColor = cssVar("--dom-care") || "#C2185B";
+    var commonOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: "y",
+      plugins: { legend: { position: "bottom", labels: { color: tickColor } } },
+      scales: {
+        x: { beginAtZero: true, ticks: { color: tickColor, precision: 0 }, grid: { color: gridColor } },
+        y: { ticks: { color: tickColor }, grid: { display: false } }
+      }
+    };
+
+    var l1Data = topL1ByDemand(15);
+    var l1Canvas = document.getElementById("demandL1Chart");
+    if (l1Canvas && l1Data.length){
+      demandCharts.l1 = new Chart(l1Canvas.getContext("2d"), {
+        type: "bar",
+        data: {
+          labels: l1Data.map(function(x){ return x.l1Name; }),
+          datasets: [
+            { label: "Current apps", data: l1Data.map(function(x){ return x.appCount; }), backgroundColor: appsColor },
+            { label: "Backlog demand", data: l1Data.map(function(x){ return x.demandCount; }), backgroundColor: demandColor }
+          ]
+        },
+        options: commonOptions
+      });
+    }
+
+    var l2Data = topCapabilitiesByDemand(12);
+    var l2Canvas = document.getElementById("demandL2Chart");
+    if (l2Canvas && l2Data.length){
+      demandCharts.l2 = new Chart(l2Canvas.getContext("2d"), {
+        type: "bar",
+        data: {
+          labels: l2Data.map(function(g){ return g.l2Id; }),
+          datasets: [
+            { label: "Current apps", data: l2Data.map(function(g){ return g.apps.length; }), backgroundColor: appsColor },
+            { label: "Backlog demand", data: l2Data.map(function(g){ return g.demands.length; }), backgroundColor: demandColor }
+          ]
+        },
+        options: commonOptions
+      });
+    }
+  }
+
   // ---------------- rendering: EA Framework diagram ----------------
   function l1DominantBucket(l1Id){
     var counts = {};
@@ -1149,10 +1394,12 @@
     else if (state.view === "layered") body = renderLayeredView();
     else if (state.view === "framework") body = renderFrameworkView();
     else if (state.view === "reconcile") body = renderReconcileView();
+    else if (state.view === "demand") body = renderDemandView();
     else body = renderUnmappedView();
     canvas.innerHTML = readonlyBanner + body;
     wireCanvasEvents();
     wireReconcileEvents();
+    if (state.view === "demand") wireDemandCharts();
   }
 
   function wireCanvasEvents(){

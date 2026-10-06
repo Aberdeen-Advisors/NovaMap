@@ -10,17 +10,19 @@ module.exports = async (req, res) => {
   }
   try {
     const sql = getSql();
-    const [capRows, appRows, unmappedRows, techRows] = await Promise.all([
+    const [capRows, appRows, unmappedRows, techRows, demandRows] = await Promise.all([
       sql`SELECT data FROM capabilities ORDER BY l2_id`,
       sql`SELECT data FROM applications ORDER BY apm_number`,
       sql`SELECT data FROM unmapped_apps ORDER BY apm_number`,
       sql`SELECT data FROM tech_standards ORDER BY name`,
+      sql`SELECT data FROM demand_items ORDER BY demand_number`,
     ]);
     res.status(200).json({
       capabilities: capRows.map((r) => r.data),
       applications: appRows.map((r) => r.data),
       unmapped: unmappedRows.map((r) => r.data),
       techStandards: techRows.map((r) => r.data),
+      demand: demandRows.map((r) => r.data),
     });
   } catch (err) {
     console.error('GET /api/data failed', err);
